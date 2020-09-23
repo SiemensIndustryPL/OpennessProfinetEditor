@@ -17,6 +17,7 @@ namespace NetEditor
         private DeviceItem deviceItem;
         private NetworkDeviceItemLevel itemLevel;
 
+
         // maybe create setters instead of "private set" and "update*" ? to be seen
         public string IpSelectedBy { get; private set; } = null;
         public string IpAddress { get; private set; } = null;
@@ -60,7 +61,6 @@ namespace NetEditor
                 }
             }
 
-
             string nodeType = node.GetAttribute("NodeType").ToString();
             if (!nodeType.Equals("Ethernet")) return null;
 
@@ -88,9 +88,12 @@ namespace NetEditor
             var UpdateHMNameTask = UpdateHMName(); // complicated
             var UpdateItfOperatingModeTask = UpdateItfOperatingMode(); // deviceitem
             var UpdatePnNumberTask = UpdatePnNumber(); // connector/controller
+            var UpdateIoSystemNameTask = UpdateIoSystemName(); // this is weird and should be changed
+            // ndi creation should include a reference to it's subnet.
 
-            await Task.WhenAll(getAllNodeRelatedParametersTask, UpdatePnSubnetNameTask, 
-                UpdateHMNameTask, UpdateItfOperatingModeTask, UpdatePnNumberTask).ConfigureAwait(false);
+            await Task.WhenAll(getAllNodeRelatedParametersTask, UpdatePnSubnetNameTask, UpdateHMNameTask,
+                               UpdateItfOperatingModeTask, UpdatePnNumberTask, UpdateIoSystemNameTask
+                               ).ConfigureAwait(false);
             
         }
 
@@ -135,28 +138,19 @@ namespace NetEditor
 
         public string UpdateIPAddress()
         {
-            IpAddress = null;
-
             if (IpSelectedByProject) IpAddress = node.GetAttribute("Address").ToString();
-
             return IpAddress;
         }
 
         public string UpdateAddressMask()
         {
-            AddressMask = null;
-
             if (IpSelectedByProject) AddressMask = node.GetAttribute("SubnetMask").ToString();
-
             return AddressMask;
         }
 
         public string UpdateRouterAddress()
         {
-            RouterAddress = null;
-
             if (UseRouter) RouterAddress = node.GetAttribute("RouterAddress").ToString();
-
             return RouterAddress;
         }
 
@@ -221,7 +215,7 @@ namespace NetEditor
             return this.PnSubnetName;
         }
 
-        public string UpdateIoSystemName()
+        public async Task<string> UpdateIoSystemName()
         {
             // at some point it will be wiser to add a reference to subnet in Network Device Item constructor
             // then this functions will become super simple and always right.
@@ -229,21 +223,25 @@ namespace NetEditor
             IoSystemName = null;
 
             // this will not work correctly if it needs second ioconnector or something.
-            NetworkInterface itf = ((IEngineeringServiceProvider)deviceItem).GetService<NetworkInterface>();
             if (itemLevel != NetworkDeviceItemLevel.IoSystem) return this.IoSystemName; //null
 
-            if (itf.IoConnectors.Count != 0)
+            await Task.Run(() =>
             {
-                IoSystem ioSystem = itf.IoConnectors[0].ConnectedToIoSystem;
-                // the fact that I need that ?? means some devices classified as ioSystem level are not in iosystem.
-                // most likely it's broken cause I hardcoded 0. I will think a bit more about it.
-                this.IoSystemName = ioSystem?.Name ?? null;
-            }
-            else if (itf.IoControllers.Count == 1)
-            {
-                IoSystem ioSystem = itf.IoControllers[0].IoSystem;
-                this.IoSystemName = ioSystem?.Name ?? null;
-            }
+                NetworkInterface itf = ((IEngineeringServiceProvider)deviceItem).GetService<NetworkInterface>();
+
+                if (itf.IoConnectors.Count != 0)
+                {
+                    IoSystem ioSystem = itf.IoConnectors[0].ConnectedToIoSystem;
+                    // the fact that I need that ?? means some devices classified as ioSystem level are not in iosystem.
+                    // most likely it's broken cause I hardcoded 0. I will think a bit more about it.
+                    this.IoSystemName = ioSystem?.Name;// ?? null;
+                }
+                else if (itf.IoControllers.Count == 1)
+                {
+                    IoSystem ioSystem = itf.IoControllers[0].IoSystem;
+                    this.IoSystemName = ioSystem?.Name;// ?? null;
+                }
+            });
 
             return IoSystemName;
         }
@@ -267,14 +265,15 @@ namespace NetEditor
 
                 // this will not work correctly if it needs second ioconnector or something.
                 // also, GetAttributeInfos is really heavy
-                if (itf.IoConnectors.Count != 0 && itf.IoConnectors[0].GetAttributeInfos().Any((x) => x.Name == "PnDeviceNumber"))
-                {
-                    this.PnDeviceNumber = itf.IoConnectors[0].GetAttribute("PnDeviceNumber").ToString();
-                }
-                else if (itf.IoControllers.Count == 1)
+                if (itf.IoControllers.Count == 1)
                 {
                     this.PnDeviceNumber = itf.IoControllers[0].GetAttribute("PnDeviceNumber").ToString();
                 }
+                else if(itf.IoConnectors.Count != 0 && itf.IoConnectors[0].GetAttributeInfos().Any((x) => x.Name == "PnDeviceNumber"))
+                {
+                    this.PnDeviceNumber = itf.IoConnectors[0].GetAttribute("PnDeviceNumber").ToString();
+                }
+
             }).ConfigureAwait(false);
 
             return this.PnDeviceNumber;
@@ -287,20 +286,20 @@ namespace NetEditor
         {
             if (IpSelectedByProject)
             {
-                // try catch wont catch async task, I think.
-                try
+                IPAddress ip;
+                bool addressIsValid = IPAddress.TryParse(newAddress, out ip);
+
+                if (addressIsValid)
                 {
                     await Task.Run(() =>
                     {
-                        node.SetAttribute("Address", newAddress);
-                        IpAddress = node.GetAttribute("Address").ToString();
+                        node.SetAttribute("Address", ip.ToString());
+                        this.IpAddress = node.GetAttribute("Address").ToString();
                     }).ConfigureAwait(false);
-
-                    //IpAddress = node.GetAttribute("Address").ToString();
                 }
-                catch (EngineeringTargetInvocationException e)
+                else
                 {
-                    return;
+                    throw new ArgumentException("Provided input is not a valid IP address.");
                 }
             }
             else
@@ -312,12 +311,23 @@ namespace NetEditor
 
         public async Task ChangeAddressMask(string newMask)
         {
-            // actually, some try catch with exception from tia portal could be nice
+            AddressMask = null;
+
             if (IpSelectedByProject)
             {
-                await Task.Run(() => node.SetAttribute("SubnetMask", newMask)).ConfigureAwait(false); //try catch może?
-                AddressMask = null;
-                AddressMask = await Task.Run(() => node.GetAttribute("SubnetMask").ToString()).ConfigureAwait(false);
+                IPAddress mask;
+                bool addressIsValid = IPAddress.TryParse(newMask, out mask);
+
+                if (addressIsValid)
+                {
+                    await Task.Run(() => node.SetAttribute("SubnetMask", mask.ToString())).ConfigureAwait(false);
+                    
+                    AddressMask = await Task.Run(() => node.GetAttribute("SubnetMask").ToString()).ConfigureAwait(false);
+                }
+                else
+                {
+                    throw new ArgumentException("Provided input is not a valid mask.");
+                }
             }
             else
             {
@@ -328,15 +338,20 @@ namespace NetEditor
 
         public void ChangeRouterAddress(string newAddress)
         {
+            this.RouterAddress = null;
             if (UseRouter)
             {
-                try
+                IPAddress ip;
+                bool addressIsValid = IPAddress.TryParse(newAddress, out ip);
+
+                if (addressIsValid)
                 {
-                    node.SetAttribute("RouterAddress", newAddress);
+                    node.SetAttribute("RouterAddress", ip.ToString());
+                    this.RouterAddress = node.GetAttribute("RouterAddress").ToString();
                 }
-                catch (EngineeringTargetInvocationException e)
+                else
                 {
-                    return;
+                    throw new ArgumentException("Provided input is not a valid IP address.");
                 }
             }
             else
@@ -363,14 +378,15 @@ namespace NetEditor
                         return; //in future, write some kind of exception here or sth
                     }
                     parent = grandpa;
-
                 }
 
+                // because of the way transactions work, it cannot cause any exceptions for the program to work
+                // the best solution would be to check here for all the names in project
+                // in a static dictionary of DeviceItem, string name
+                // for now, devicetable logic will take care of this.
                 try
                 {
                     parent.SetAttribute("Name", newName);
-
-                    //parent.SetAttribute("Name", newName);
                 }
                 catch (EngineeringTargetInvocationException)
                 {
@@ -383,32 +399,39 @@ namespace NetEditor
             if (autoGeneratePnName) UpdatePnDeviceName();
         }
 
-        public void ChangePnDeviceName(string newPnName)
+        public async Task ChangePnDeviceName(string newPnName)
         {
+            this.PnDeviceName = null;
             // I think it makes sense that you cannot change PN name of device not in PN net.
             // I may be wrong and it might be useful.
             if (itemLevel == NetworkDeviceItemLevel.Project) return;
 
-            if (String.IsNullOrEmpty(newPnName))
+            await Task.Run(() =>
             {
-                node.SetAttribute("PnDeviceNameAutoGeneration", true);
-            }
-            else
-            {
-                node.SetAttribute("PnDeviceNameAutoGeneration", false);
-                node.SetAttribute("PnDeviceName", newPnName);
-            }
+                if (String.IsNullOrEmpty(newPnName))
+                {
+                    node.SetAttribute("PnDeviceNameAutoGeneration", true);
+                }
+                else
+                {
+                    node.SetAttribute("PnDeviceNameAutoGeneration", false);
+                    node.SetAttribute("PnDeviceName", newPnName);
+                }
+
+                this.PnDeviceName = node.GetAttribute("PnDeviceName").ToString();
+                this.autoGeneratePnName = (bool)node.GetAttribute("PnDeviceNameAutoGeneration");
+            });
         }
         
         public void ChangePnDeviceNameAutoGeneration(bool newAuto)
         {
-            //if (itemLevel == NetworkDeviceItemLevel.Project) return;
             node.SetAttribute("PnDeviceNameAutoGeneration", newAuto);
-
+            this.autoGeneratePnName = (bool)node.GetAttribute("PnDeviceNameAutoGeneration");
         }
 
         public void ChangePnNumber(int newPnNumber)
         {
+            this.PnDeviceNumber = null;
             // this will not work correctly if it needs second ioconnector or something.
             NetworkInterface itf = ((IEngineeringServiceProvider)deviceItem).GetService<NetworkInterface>();
             if (itemLevel == NetworkDeviceItemLevel.Project) return;
@@ -416,20 +439,23 @@ namespace NetEditor
             if (itf.IoConnectors.Count != 0 && itf.IoConnectors[0].GetAttributeInfos().Any((x) => x.Name == "PnDeviceNumber"))
             {
                 itf.IoConnectors[0].SetAttribute("PnDeviceNumber", newPnNumber);
+                this.PnDeviceNumber = itf.IoConnectors[0].GetAttribute("PnDeviceNumber").ToString();
             }
-
         }
 
-        public void ChangeSubnetName(string newSubnetName)
+        public void ChangeSubnetName(string newSubnetName) //TODO: await; exception for why it wasn't changed
         {
+            this.PnSubnetName = null;
             if (itemLevel != NetworkDeviceItemLevel.Project && !String.IsNullOrEmpty(newSubnetName))
             {
                 node.ConnectedSubnet.SetAttribute("Name", newSubnetName);
+                this.PnSubnetName = node.ConnectedSubnet.GetAttribute("Name").ToString();
             }
         }
 
         public void ChangeIoSystemName(string newIoSystemName)
         {
+            this.IoSystemName = null;
             NetworkInterface itf = ((IEngineeringServiceProvider)deviceItem).GetService<NetworkInterface>();
             if (itemLevel != NetworkDeviceItemLevel.IoSystem) return;
 
@@ -444,10 +470,13 @@ namespace NetEditor
             }
             else return;
 
-            if (ioSystem != null) ioSystem.SetAttribute("Name", newIoSystemName);
+            if (ioSystem != null)
+            {
+                ioSystem.SetAttribute("Name", newIoSystemName);
+                this.IoSystemName = ioSystem.GetAttribute("Name").ToString();
+            }
         }
         #endregion
-
     }
 
     public enum NetworkDeviceItemLevel
@@ -464,6 +493,7 @@ namespace NetEditor
         None
     }
 
+    [Serializable]
     public class DeviceItemNotValidException : Exception
     {
         public DeviceItemNotValidException()
@@ -478,6 +508,11 @@ namespace NetEditor
         public DeviceItemNotValidException(string message, Exception inner)
             : base(message, inner)
         {
+        }
+
+        protected DeviceItemNotValidException(System.Runtime.Serialization.SerializationInfo serializationInfo, System.Runtime.Serialization.StreamingContext streamingContext)
+        {
+            throw new NotImplementedException();
         }
     }
 }

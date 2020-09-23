@@ -245,7 +245,7 @@ namespace NetEditor
             this.deviceTable.TabIndex = 118;
             this.deviceTable.CellMouseUp += new System.Windows.Forms.DataGridViewCellMouseEventHandler(this.DeviceTable_OnCellMouseUp);
             this.deviceTable.CellValueChanged += new System.Windows.Forms.DataGridViewCellEventHandler(this.deviceTable_CellEndEdit);
-            this.deviceTable.SortCompare += new System.Windows.Forms.DataGridViewSortCompareEventHandler(this.DGV_SortCompare);
+            this.deviceTable.ColumnHeaderMouseClick += new System.Windows.Forms.DataGridViewCellMouseEventHandler(this.DeviceTable_Sort);
             // 
             // dgv_Id
             // 
@@ -257,6 +257,7 @@ namespace NetEditor
             this.dgv_Id.MinimumWidth = 6;
             this.dgv_Id.Name = "dgv_Id";
             this.dgv_Id.ReadOnly = true;
+            this.dgv_Id.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
             this.dgv_Id.Width = 50;
             // 
             // dgv_Mode
@@ -280,6 +281,7 @@ namespace NetEditor
             this.dgv_DeviceName.HeaderText = "Name";
             this.dgv_DeviceName.MinimumWidth = 100;
             this.dgv_DeviceName.Name = "dgv_DeviceName";
+            this.dgv_DeviceName.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.Programmatic;
             // 
             // dgv_autoGeneratePnName
             // 
@@ -316,7 +318,7 @@ namespace NetEditor
             this.dgv_IpAddress.HeaderText = "IP Address";
             this.dgv_IpAddress.MinimumWidth = 6;
             this.dgv_IpAddress.Name = "dgv_IpAddress";
-            this.dgv_IpAddress.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
+            this.dgv_IpAddress.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.Programmatic;
             this.dgv_IpAddress.Width = 120;
             // 
             // dgv_Mask
@@ -503,6 +505,9 @@ namespace NetEditor
         private GroupBox groupBox1;
         private Button btn_ExportToCSV;
         private ProgressBar progressBar;
+        private Label txt_StatusBar;
+        private RadioButton radio151;
+        private RadioButton radio160;
         private DataGridViewTextBoxColumn dgv_Id;
         private DataGridViewTextBoxColumn dgv_Mode;
         private DataGridViewTextBoxColumn dgv_DeviceName;
@@ -514,9 +519,6 @@ namespace NetEditor
         private DataGridViewTextBoxColumn dgv_RouterAddress;
         private DataGridViewTextBoxColumn dgv_PnSubnet;
         private DataGridViewTextBoxColumn dgv_IoSystem;
-        private Label txt_StatusBar;
-        private RadioButton radio151;
-        private RadioButton radio160;
     }
 }
 

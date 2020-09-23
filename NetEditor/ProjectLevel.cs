@@ -29,14 +29,14 @@ namespace NetEditor
 
 
             ret.UnusedDevices = ret.GetAllProjectDevices(project).Except(usedDevices).ToList();
-            ret.UnusedDeviceItems = await ret.GetUnusedDeviceItems();
+            ret.UnusedDeviceItems = await ret.GetUnusedDeviceItems().ConfigureAwait(false);
 
             return ret;
         }
 
-        public static async Task AddSubnetAndUsedDevices (ProjectLevel pl, Subnet subnet, List<Device> usedDevices)
+        public static async Task AddSubnetAndUsedDevices(ProjectLevel pl, Subnet subnet, List<Device> usedDevices)
         {
-            SubnetLevel subnetlevel = await SubnetLevel.Create(subnet);
+            SubnetLevel subnetlevel = await SubnetLevel.Create(subnet).ConfigureAwait(false);
             pl.Subnets.Add(subnetlevel);
             usedDevices.AddRange(subnetlevel.GetDevices());
         }
@@ -46,25 +46,16 @@ namespace NetEditor
         {
             List<Device> devices = new List<Device>();
             // Add all project devices
-            foreach (var dev in project.Devices)
-            {
-                devices.Add(dev);
-            }
+
+            //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            devices.AddRange(project.Devices);
+
             foreach (DeviceUserGroup group in project.DeviceGroups)
             {
-                /*
-                List<Device> groupDevices = new List<Device>();
-                groupDevices = GetAllGroupedDevices(group);
-                groupDevices.ForEach((dev) =>
-                {
-                    devices.Add(dev);
-                });*/
                 devices.AddRange(GetAllGroupedDevices(group));
             }
-            foreach (var dev in project.UngroupedDevicesGroup.Devices)
-            {
-                devices.Add(dev);
-            }
+
+            devices.AddRange(project.UngroupedDevicesGroup.Devices);
 
             return devices;
         }
@@ -72,18 +63,13 @@ namespace NetEditor
         private List<Device> GetAllGroupedDevices(DeviceUserGroup group)
         {
             List<Device> devices = new List<Device>();
-            foreach (Device dev in group.Devices)
-            {
-                devices.Add(dev);
-            }
+
+            devices.AddRange(group.Devices);
+
             foreach (DeviceUserGroup subgroup in group.Groups)
             {
-                List<Device> subDevices = new List<Device>();
-                subDevices = GetAllGroupedDevices(subgroup);
-                subDevices.ForEach((dev) =>
-                {
-                    devices.Add(dev);
-                });
+                List<Device> subGroupDevices = GetAllGroupedDevices(subgroup);
+                devices.AddRange(subGroupDevices);
             }
             return devices;
         }

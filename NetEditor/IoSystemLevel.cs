@@ -49,8 +49,9 @@ namespace NetEditor
             }
 
             IoController = await IoControllerTask.ConfigureAwait(false);
-            IoDevices.AddRange(await Task.WhenAll<NetworkDeviceItem>(ioDeviceTasks).ConfigureAwait(false));
-            IoDevices.RemoveAll((iod) => iod == null);
+            NetworkDeviceItem[] ioDevices = await Task.WhenAll<NetworkDeviceItem>(ioDeviceTasks).ConfigureAwait(false);
+            IoDevices.AddRange(ioDevices.Where(iod => iod != null));
+            //IoDevices.RemoveAll((iod) => iod == null);
         }
 
         public List<Device> GetDevices()

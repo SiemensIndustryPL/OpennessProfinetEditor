@@ -1,6 +1,7 @@
 ﻿using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace NetEditor
@@ -26,7 +27,7 @@ namespace NetEditor
         {
             var ret = new SubnetLevel(subnet);
 
-            ret.SubnetLvlDevItems = await ret.FindDevItemsWithoutIoSystem(); // create subnet builder so it can be multitasked
+            ret.SubnetLvlDevItems = await ret.FindDevItemsWithoutIoSystem().ConfigureAwait(false); // create subnet builder so it can be multitasked
             
             var ioSystemTasks = new List<Task<IoSystemLevel>>();
 
@@ -36,7 +37,8 @@ namespace NetEditor
                 NetworkInterface controllerNetInterface = (NetworkInterface)anyIoSystem.Parent.Parent;
                 string ioSystemType = controllerNetInterface.GetAttribute("InterfaceType").ToString();
                 if (!ioSystemType.Equals("Ethernet")) continue;
-                ioSystemTasks.Add(IoSystemLevel.Create(anyIoSystem, ret)); // this waits unnecessarily, bc foreach is not async
+
+                ioSystemTasks.Add(IoSystemLevel.Create(anyIoSystem, ret));
             }
             ret.IoSystems.AddRange(await Task.WhenAll(ioSystemTasks).ConfigureAwait(false));
 
@@ -57,7 +59,8 @@ namespace NetEditor
 
         private async Task<List<NetworkDeviceItem>> FindDevItemsWithoutIoSystem()
         {
-            List<NetworkDeviceItem> connectedToSubnetButNotIoSystem = new List<NetworkDeviceItem>();
+            // It most likely can create less lists in the process
+            List<NetworkDeviceItem> inSubnetButNotInIoSystem = new List<NetworkDeviceItem>();
             var subnetDeviceTasks = new List<Task<NetworkDeviceItem>>();
 
             foreach (Node node in subnet.Nodes)
@@ -67,12 +70,12 @@ namespace NetEditor
                 //string nodeType = node.GetAttribute("NodeType").ToString();
                 //if (!nodeType.Equals("Ethernet")) continue;
                 subnetDeviceTasks.Add(NetworkDeviceItem.Create((DeviceItem)ni.Parent, NetworkDeviceItemLevel.IoSystem,
-                    NetworkDeviceItemWorkMode.None, this, null)); 
+                                                                NetworkDeviceItemWorkMode.None, this, null)); 
             }
-            connectedToSubnetButNotIoSystem.AddRange(await Task.WhenAll<NetworkDeviceItem>(subnetDeviceTasks).ConfigureAwait(false));
-            connectedToSubnetButNotIoSystem.RemoveAll((iod) => iod == null);
+            NetworkDeviceItem[] inThisSubnet = await Task.WhenAll<NetworkDeviceItem>(subnetDeviceTasks).ConfigureAwait(false);
+            inSubnetButNotInIoSystem.AddRange(inThisSubnet.Where(iod => iod != null));
 
-            return connectedToSubnetButNotIoSystem;
+            return inSubnetButNotInIoSystem;
         }
 
         private static bool IsInIoSystem(NetworkInterface ni)

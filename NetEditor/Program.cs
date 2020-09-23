@@ -11,11 +11,11 @@ namespace NetEditor
         [STAThread]
         static int Main()
         {
-            WinApi.TimeBeginPeriod(1);
+            _ = WinApi.TimeBeginPeriod(1);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new Form1());
-            WinApi.TimeEndPeriod(1);
+            _ = WinApi.TimeEndPeriod(1);
             return 0;
         }
     }
