@@ -10,7 +10,14 @@ namespace NetEditor
     {
         public List<SubnetLevel> Subnets { get; private set; } = new List<SubnetLevel>();
         public List<NetworkDeviceItem> UnusedDeviceItems { get; private set; }
-        public List<Device> UnusedDevices { get; private set; } 
+        public List<Device> UnusedDevices { get; private set; }
+
+
+        public int CountIoControllers { get; private set; } = 0;
+        public int CountIoDevices { get; private set; } = 0;
+        public int CountInSubnets { get; private set; } = 0; 
+        public int CountUnused { get; private set; } = 0;
+
 
         public ProjectLevel() { }
 
@@ -31,6 +38,8 @@ namespace NetEditor
             ret.UnusedDevices = ret.GetAllProjectDevices(project).Except(usedDevices).ToList();
             ret.UnusedDeviceItems = await ret.GetUnusedDeviceItems().ConfigureAwait(false);
 
+            ret.CountDevices();
+
             return ret;
         }
 
@@ -40,7 +49,6 @@ namespace NetEditor
             pl.Subnets.Add(subnetlevel);
             usedDevices.AddRange(subnetlevel.GetDevices());
         }
-
 
         private List<Device> GetAllProjectDevices(Project project)
         {
@@ -94,6 +102,24 @@ namespace NetEditor
             validDeviceItems.AddRange(await Task.WhenAll<NetworkDeviceItem>(validDeviceItemTasks).ConfigureAwait(false));
             validDeviceItems.RemoveAll((vdi) => vdi == null);
             return validDeviceItems;
+        }
+
+        private void CountDevices()
+        {
+            CountUnused = UnusedDeviceItems.Count;
+
+            Subnets.ForEach((sn) => 
+            {
+                CountIoControllers += sn.IoSystems.Count;
+                CountInSubnets += sn.SubnetLvlDevItems.Count;
+
+                sn.IoSystems.ForEach((ios) => 
+                {
+                    CountIoDevices += ios.IoDevices.Count;
+                });
+            });
+
+            
         }
     }
 }

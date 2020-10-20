@@ -20,8 +20,8 @@ namespace NetEditor
     {
         private static TiaPortalProcess _tiaProcess;
         private ProjectLevel projectLevel;
-        private Dictionary<int, NetworkDeviceItem> rowDevices = new Dictionary<int, NetworkDeviceItem>();
-        private bool dataTableAutoEdit = true;
+        
+        private bool deviceTableAutoEdit = true;
         private ExclusiveAccess exclusiveAccess;
         private Transaction transaction;
         // it is needed because disposed access and transaction are not null, so it's hard to check for them.
@@ -29,10 +29,31 @@ namespace NetEditor
         private bool transactionOpen = false;
         private SortBy lastSortingOrder = SortBy.Name;
 
+        private static class ID
+        {
+            private static int nextID = 0;
+
+            public static int NextID 
+            {
+                get 
+                {
+                    nextID++;
+                    return nextID;
+                }
+            }
+
+            public static void Clear()
+            {
+                nextID = 0;
+            }
+
+        }
+
+
         public TiaPortal MyTiaPortal { get; set; }
         public Project MyProject { get; set; }
 
-        string version = "0.4";
+        string version = "0.5";
 
         public Form1()
         {
@@ -40,8 +61,6 @@ namespace NetEditor
             AppDomain CurrentDomain = AppDomain.CurrentDomain;
             CurrentDomain.AssemblyResolve += new ResolveEventHandler(MyResolver);
             InitializeComponent();
-            //LoadOpennessAssembly();
-
 
             // Double buffering can make DGV slow in remote desktop
             if (!System.Windows.Forms.SystemInformation.TerminalServerSession)
@@ -51,6 +70,9 @@ namespace NetEditor
                 pi.SetValue(deviceTable, true, null);
             }
             this.Text = $"Net Editor {version}";
+
+            TextWriterTraceListener myListener = new TextWriterTraceListener(System.Console.Out);
+            Debug.Listeners.Add(myListener);
         }
 
         private Assembly MyResolver(object sender, ResolveEventArgs args)
@@ -121,6 +143,7 @@ namespace NetEditor
             btn_Disconnect.Enabled = false;
             btn_CommitChanges.Enabled = false;
             btn_ExportToCSV.Enabled = false;
+            txt_Search.Enabled = false;
 
             try
             {
@@ -138,12 +161,19 @@ namespace NetEditor
             txt_Status.AppendText($"Connected to TIA Portal project: {MyProject.Path}{Environment.NewLine}");
             this.Text = $"Net Editor {version}: {MyProject.Path}";
 
-            PopulateDeviceTable(lastSortingOrder);
-           
+            PopulateDeviceTable(lastSortingOrder, txt_Search.Text);
+
+            FillStatusBar();
+
+            this.dgv_PnSubnet.HeaderCell.SortGlyphDirection = SortOrder.Descending;
+            this.dgv_DeviceName.HeaderCell.SortGlyphDirection = SortOrder.Descending;
+            this.dgv_IpAddress.HeaderCell.SortGlyphDirection = SortOrder.Descending;
+
             btn_ClearChanges.Enabled = true;
             btn_Disconnect.Enabled = true;
             btn_CommitChanges.Enabled = true;
             btn_ExportToCSV.Enabled = true;
+            txt_Search.Enabled = true;
         }
 
         private async Task InitializeConnectionWithTiaPortalProject()
@@ -188,63 +218,162 @@ namespace NetEditor
             }).ConfigureAwait(true);
         }
 
-        private void PopulateDeviceTable(SortBy sortingOrder)
+        private void PopulateDeviceTable(SortBy sortingOrder, string searchText)
         {
-            dataTableAutoEdit = true;
-            deviceTable.Rows.Clear();
-            rowDevices.Clear();
+            if (projectLevel == null)
+            {
+                Debug.WriteLine("Nothing to populate device table with.");
+                return;
+            }
 
+            deviceTableAutoEdit = true;
+            deviceTable.Rows.Clear();
+            ID.Clear();
+            DeviceRowsHelper.DeviceByRowID.Clear();
+
+            if (String.IsNullOrWhiteSpace(searchText) | searchText.Length <= 2)
+            {
+                deviceTable.Rows.AddRange(GetMatchingRows(sortingOrder).ToArray());
+            }
+            else
+            {
+                deviceTable.Rows.AddRange(GetMatchingRows(sortingOrder, searchText).ToArray());
+            }
+            deviceTableAutoEdit = false;
+
+            DeviceRowsHelper.MarkRepeatingIPs(deviceTable.Rows, dgv_IpAddress.Index, dgv_Mode.Index);
+        }
+
+        private List<DataGridViewRow> GetMatchingRows(SortBy sortingOrder, string searchText)
+        {
             List<DataGridViewRow> rows = new List<DataGridViewRow>();
             List<SubnetLevel> subnets = projectLevel.Subnets;
 
-            Sort(subnets, sortingOrder);
+            EngineeringCompare.Sort(subnets, sortingOrder);
             subnets.ForEach(sn =>
             {
-                Sort(sn.IoSystems, sortingOrder);
+                EngineeringCompare.Sort(sn.IoSystems, sortingOrder);
                 sn.IoSystems.ForEach(ioSystemLvl =>
                 {
-                    AddIoControllerRow(rows, ioSystemLvl);
+                    List<DataGridViewRow> ioDevicesRows = new List<DataGridViewRow>();
+                    DataGridViewRow ioControllerRow = IoControllerRow(ioSystemLvl);
 
-                    Sort(ioSystemLvl.IoDevices, sortingOrder);
+                    EngineeringCompare.Sort(ioSystemLvl.IoDevices, sortingOrder);
                     ioSystemLvl.IoDevices.ForEach(iod =>
                     {
-                        AddIoDeviceRow(rows, iod, ioSystemLvl);
+                        DataGridViewRow ioDeviceRow = IoDeviceRow(iod, ioSystemLvl);
+                        if (ContainsSearchText(ioDeviceRow, searchText))
+                        {
+                            ioDevicesRows.Add(ioDeviceRow);
+                        }  
+                    });
+
+                    if (ContainsSearchText(ioControllerRow, searchText) | ioDevicesRows.Count != 0)
+                    {
+                        rows.Add(ioControllerRow);
+                        rows.AddRange(ioDevicesRows);
+                    }
+                });
+
+                EngineeringCompare.Sort(sn.SubnetLvlDevItems, sortingOrder);
+                sn.SubnetLvlDevItems.ForEach(sdi =>
+                {
+                    DataGridViewRow subnetDeviceRow = SubnetDeviceRow(sdi);
+                    if (ContainsSearchText(subnetDeviceRow, searchText))
+                    {
+                        rows.Add(subnetDeviceRow);
+                    }
+                });
+            });
+
+            EngineeringCompare.Sort(projectLevel.UnusedDeviceItems, sortingOrder);
+            projectLevel.UnusedDeviceItems.ForEach(udi =>
+            {
+                DataGridViewRow unusedDeviceRow = UnusedDeviceRow(udi);
+                if (ContainsSearchText(unusedDeviceRow, searchText))
+                {
+                    rows.Add(unusedDeviceRow);
+                }
+            });
+
+            return rows;
+        }
+
+        private List<DataGridViewRow> GetMatchingRows(SortBy sortingOrder)
+        {
+            List<DataGridViewRow> rows = new List<DataGridViewRow>();
+            List<SubnetLevel> subnets = projectLevel.Subnets;
+
+            EngineeringCompare.Sort(subnets, sortingOrder);
+            subnets.ForEach(sn =>
+            {
+                EngineeringCompare.Sort(sn.IoSystems, sortingOrder);
+                sn.IoSystems.ForEach(ioSystemLvl =>
+                {
+                    rows.Add(IoControllerRow(ioSystemLvl));
+
+                    EngineeringCompare.Sort(ioSystemLvl.IoDevices, sortingOrder);
+                    ioSystemLvl.IoDevices.ForEach(iod =>
+                    {
+                        rows.Add(IoDeviceRow(iod, ioSystemLvl));
                     });
                 });
 
-                Sort(sn.SubnetLvlDevItems, sortingOrder);
+                EngineeringCompare.Sort(sn.SubnetLvlDevItems, sortingOrder);
                 sn.SubnetLvlDevItems.ForEach(sdi =>
                 {
-                    AddSubnetDeviceRow(rows, sdi);
+                    rows.Add(SubnetDeviceRow(sdi));
                 });
             });
 
-            Sort(projectLevel.UnusedDeviceItems, sortingOrder);
+            EngineeringCompare.Sort(projectLevel.UnusedDeviceItems, sortingOrder);
             projectLevel.UnusedDeviceItems.ForEach(udi =>
             {
-                AddUnusedDeviceRow(rows, udi);
+                rows.Add(UnusedDeviceRow(udi));
             });
 
+            return rows;
+        }
 
-            deviceTable.Rows.AddRange(rows.ToArray());
-            dataTableAutoEdit = false;
+        private bool ContainsSearchText(DataGridViewRow row, string searchText)
+        {
+            bool containsSearchText = false;
 
-            MarkRowsWithRepeatingIPs();
+            foreach (DataGridViewCell cell in row.Cells)
+            {
+                if (cell.Value.ToString().Contains(searchText))
+                {
+                    cell.Style.BackColor = System.Drawing.Color.Yellow;
+                    containsSearchText = true;
+                }
+            }
+
+            return containsSearchText;
+        }
+
+        private void FillStatusBar()
+        {
+            int allDevices = projectLevel.CountIoControllers + projectLevel.CountInSubnets + 
+                             projectLevel.CountIoDevices + projectLevel.CountUnused;
+
+            txt_StatusBar.Text = $"{allDevices} devices total ({projectLevel.CountIoControllers} IO controllers, " +
+                                 $"{projectLevel.CountIoDevices} IO devices, {projectLevel.CountInSubnets} other in subnets, " +
+                                 $"{projectLevel.CountUnused} unused)";
         }
 
         #region Events
         async void deviceTable_CellEndEdit(object sender, DataGridViewCellEventArgs e)
         {
-            if (dataTableAutoEdit) return;
+            if (deviceTableAutoEdit) return;
 
-            dataTableAutoEdit = true;
+            deviceTableAutoEdit = true;
 
             DataGridViewRow editedRow = deviceTable.Rows[e.RowIndex];
             DataGridViewCell editedCell = editedRow.Cells[e.ColumnIndex];
             string newValue = editedCell.Value?.ToString() ?? "";
 
             int id = int.Parse(editedRow.Cells[dgv_Id.Index].Value.ToString());
-            NetworkDeviceItem netDeviceItem = rowDevices[id];
+            NetworkDeviceItem netDeviceItem = DeviceRowsHelper.DeviceByRowID[id];
 
             if (e.ColumnIndex == dgv_IpAddress.Index) 
             {
@@ -282,7 +411,7 @@ namespace NetEditor
             {
                 await EditRouterAddressCell(netDeviceItem, editedCell, newValue).ConfigureAwait(true);
             }
-            dataTableAutoEdit = false;
+            deviceTableAutoEdit = false;
 
         }
 
@@ -316,7 +445,7 @@ namespace NetEditor
                     $"{Environment.NewLine}");
             }
 
-            MarkRowsWithRepeatingIPs();
+            DeviceRowsHelper.MarkRepeatingIPs(deviceTable.Rows, dgv_IpAddress.Index, dgv_Mode.Index);
         }
 
         async Task EditDeviceNameCell(NetworkDeviceItem editedNDI, DataGridViewRow editedRow, 
@@ -360,7 +489,7 @@ namespace NetEditor
 
             int deviceKey;
 
-            dataTableAutoEdit = true;
+            deviceTableAutoEdit = true;
             foreach (DataGridViewRow row in deviceTable.Rows)
             {
                 if (row.Equals(editedRow)) continue; // it may be slow, look out
@@ -369,7 +498,7 @@ namespace NetEditor
                 if (rowDeviceName != oldName) continue;
 
                 deviceKey = int.Parse(row.Cells[dgv_Id.Index].Value.ToString());
-                NetworkDeviceItem modifiedDI = rowDevices[deviceKey];
+                NetworkDeviceItem modifiedDI = DeviceRowsHelper.DeviceByRowID[deviceKey];
 
                 row.Cells[dgv_DeviceName.Index].Value = await modifiedDI.UpdateHMName().ConfigureAwait(true);
 
@@ -385,7 +514,7 @@ namespace NetEditor
                                           $"\"{oldPnNameM}\" to: \"{newPnNameM}\".{Environment.NewLine}");
                 }
             }
-            dataTableAutoEdit = false;
+            deviceTableAutoEdit = false;
         }
 
         async Task EditMaskCell(NetworkDeviceItem editedNDI, DataGridViewCell editedCell, string proposedMask)
@@ -401,6 +530,7 @@ namespace NetEditor
             {
                 editedCell.Value = oldMask;
                 txt_Status.AppendText(ex.Message + Environment.NewLine);
+                return;
             }
             catch (EngineeringNotSupportedException ex)
             {
@@ -408,6 +538,7 @@ namespace NetEditor
 
                 txt_Status.AppendText(ex.Message + Environment.NewLine);
                 Debug.WriteLine(ex.Message);
+                return;
             }
 
             string newMask = editedNDI.AddressMask;
@@ -424,9 +555,8 @@ namespace NetEditor
                 //int deviceKey = (int)row.Cells[dgv_Id.Index].Value;
 
                 int deviceKey = int.Parse(row.Cells[dgv_Id.Index].Value.ToString());
-                row.Cells[dgv_Mask.Index].Value = rowDevices[deviceKey].UpdateAddressMask();
+                row.Cells[dgv_Mask.Index].Value = DeviceRowsHelper.DeviceByRowID[deviceKey].UpdateAddressMask();
             }
-
         }
 
         async Task EditPnDeviceNameCell(NetworkDeviceItem editedNDI, DataGridViewRow editedRow, 
@@ -475,7 +605,7 @@ namespace NetEditor
                 {
                     DataGridViewCell idCell = row.Cells[dgv_Id.Index];
                     int deviceKey = int.Parse(idCell.Value.ToString());
-                    subnetCell.Value = await rowDevices[deviceKey].UpdatePnSubnetName();
+                    subnetCell.Value = await DeviceRowsHelper.DeviceByRowID[deviceKey].UpdatePnSubnetName();
                 }
             }
 
@@ -506,7 +636,7 @@ namespace NetEditor
                 {
                     DataGridViewCell idCell = row.Cells[dgv_Id.Index];
                     int deviceKey = int.Parse(idCell.Value.ToString());
-                    ioSystemCell.Value = await rowDevices[deviceKey].UpdateIoSystemName();
+                    ioSystemCell.Value = await DeviceRowsHelper.DeviceByRowID[deviceKey].UpdateIoSystemName();
                 }
             }
 
@@ -619,6 +749,7 @@ namespace NetEditor
             btn_ClearChanges.Enabled = false;
             btn_CommitChanges.Enabled = false;
             btn_Disconnect.Enabled = false;
+            txt_Search.Enabled = false;
         }
 
         private void DeviceTable_OnCellMouseUp(object sender, DataGridViewCellMouseEventArgs e)
@@ -629,57 +760,6 @@ namespace NetEditor
                 deviceTable.EndEdit();
             }
         }
-        
-        private void DGV_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
-        {
-            if (e.Column.Index == dgv_DeviceName.Index)
-            {
-                int id1 = int.Parse(deviceTable.Rows[e.RowIndex1].Cells[dgv_Id.Index].Value.ToString());
-                int id2 = int.Parse(deviceTable.Rows[e.RowIndex2].Cells[dgv_Id.Index].Value.ToString());
-
-                NetworkDeviceItem ndi1 = rowDevices[id1];
-                NetworkDeviceItem ndi2 = rowDevices[id2];
-                string name1 = e.CellValue1.ToString();
-                string name2 = e.CellValue2.ToString();
-
-                if (ndi1.SubnetLevel == null && ndi2.SubnetLevel == null) name1.CompareTo(name2);
-                else if (ndi1.SubnetLevel == null) e.SortResult = 1;
-                else if (ndi2.SubnetLevel == null) e.SortResult = -1;
-
-                else if (ndi1.SubnetLevel != ndi2.SubnetLevel) //both subnets exist and...
-                {
-                    e.SortResult = ndi1.SubnetLevel.SubnetName.CompareTo(ndi2.SubnetLevel.SubnetName);
-                }
-                else // the same subnet
-                {
-                    if (ndi1.IoSystemLevel == null && ndi2.IoSystemLevel == null) name1.CompareTo(name2);
-                    else if (ndi1.IoSystemLevel == null) e.SortResult = 1;
-                    else if (ndi2.IoSystemLevel == null) e.SortResult = -1;
-
-                    else if (ndi1.IoSystemLevel != ndi2.IoSystemLevel) //both iosystems exist and...
-                    {
-                        string s1 = ndi1.IoSystemLevel.IoController.HMName + '.' + ndi1.IoSystemLevel.IoSystemName;
-                        string s2 = ndi2.IoSystemLevel.IoController.HMName + '.' + ndi2.IoSystemLevel.IoSystemName;
-                        e.SortResult = s1.CompareTo(s2);
-                    }
-                    else // the same iosystem
-                    {
-                        if (ndi1.workMode == NetworkDeviceItemWorkMode.IoController) e.SortResult = -1;
-                        else if (ndi2.workMode == NetworkDeviceItemWorkMode.IoController) e.SortResult = 1;
-                        else e.SortResult = name1.CompareTo(name2);
-                    }
-                }
-            } 
-            else if (e.Column.Index == dgv_Id.Index)
-            {
-                int i1 = int.Parse(e.CellValue1.ToString());
-                int i2 = int.Parse(e.CellValue2.ToString());
-                e.SortResult = i1 - i2;
-            }
-           
-
-            e.Handled = true;
-        }
 
         private void DeviceTable_Sort(object sender, DataGridViewCellMouseEventArgs e)
         {
@@ -688,13 +768,13 @@ namespace NetEditor
             {
                 if (lastSortingOrder == SortBy.Name)
                 {
-                    PopulateDeviceTable(SortBy.NameRev);
+                    PopulateDeviceTable(SortBy.NameRev, txt_Search.Text);
                     lastSortingOrder = SortBy.NameRev;
                     dgv_DeviceName.HeaderCell.SortGlyphDirection = SortOrder.Ascending;
                 }
                 else
                 { 
-                    PopulateDeviceTable(SortBy.Name);
+                    PopulateDeviceTable(SortBy.Name, txt_Search.Text);
                     lastSortingOrder = SortBy.Name;
                     dgv_DeviceName.HeaderCell.SortGlyphDirection = SortOrder.Descending;
                 }
@@ -703,540 +783,124 @@ namespace NetEditor
             {
                 if (lastSortingOrder == SortBy.IpAddress)
                 {
-                    PopulateDeviceTable(SortBy.IpAddressRev);
+                    PopulateDeviceTable(SortBy.IpAddressRev, txt_Search.Text);
                     lastSortingOrder = SortBy.IpAddressRev;
                     dgv_IpAddress.HeaderCell.SortGlyphDirection = SortOrder.Ascending;
                 }
                 else
                 {
-                    PopulateDeviceTable(SortBy.IpAddress);
+                    PopulateDeviceTable(SortBy.IpAddress, txt_Search.Text);
                     lastSortingOrder = SortBy.IpAddress;
                     dgv_IpAddress.HeaderCell.SortGlyphDirection = SortOrder.Descending;
                 }
             }
-        }
-        #endregion
-
-        #region records and CSV
-        private DataGridViewRow CreateTableRecord(int Id, NetworkDeviceItem netDeviceItem, IoSystemLevel ioSystemLevel)
-        {
-            // it would be easier to return a whole row
-            rowDevices.Add(Id, netDeviceItem);
-
-            DataGridViewRow row = new DataGridViewRow();
-            row.CreateCells(deviceTable);
-            row.SetValues(CreateRecord(Id, netDeviceItem, ioSystemLevel));
- 
-            return row;
-        }
-
-        private static string[] CreateRecord(int Id, NetworkDeviceItem netDeviceItem, IoSystemLevel ioSystemLevel)
-        {
-            string deviceName = netDeviceItem.HMName;
-            string ipAddress = netDeviceItem.IpAddress ?? "";
-            string addressMask = netDeviceItem.AddressMask ?? "";
-            string pnDeviceName = netDeviceItem.PnDeviceName ?? "";
-            string interfaceOperatingMode = netDeviceItem.InterfaceOperatingMode;
-            string subnetName = netDeviceItem.PnSubnetName ?? "[Not connected]";
-            string ioSystemName = ioSystemLevel?.IoSystemName ?? "[Not connected]";
-            string pnDeviceNumber = netDeviceItem.PnDeviceNumber ?? "[N/A]";
-            string routerAddress = netDeviceItem.RouterAddress ?? "[Not used]";
-            bool autoPnName = netDeviceItem.autoGeneratePnName;
-
-            string[] record = new string[]
+            else if (e.ColumnIndex == dgv_PnSubnet.Index)
             {
-                Id.ToString(),
-                interfaceOperatingMode,
-                deviceName,
-                autoPnName.ToString(),
-                pnDeviceName,
-                pnDeviceNumber,
-                ipAddress,
-                addressMask,
-                routerAddress,
-                subnetName,
-                ioSystemName,
-            };
-
-            return record;
-        }
-
-        private static string CreateCSVRecord(NetworkDeviceItem netDeviceItem, IoSystemLevel ioSystemLevel)
-        {
-            string deviceName = netDeviceItem.HMName;
-            string ipAddress = netDeviceItem.IpAddress;
-            string addressMask = netDeviceItem.AddressMask;
-            string pnDeviceName = netDeviceItem.PnDeviceName;
-            string interfaceOperatingMode = netDeviceItem.InterfaceOperatingMode;
-            string subnetName = netDeviceItem.PnSubnetName ?? "[Not connected]";
-            string ioSystemName = ioSystemLevel?.IoSystemName ?? "[Not connected]";
-            string pnDeviceNumber = netDeviceItem.PnDeviceNumber ?? "[N/A]";
-            string routerAddress = netDeviceItem.RouterAddress ?? "[Not used]";
-            bool autoPnName = netDeviceItem.autoGeneratePnName;
-
-            string record = "" +
-                interfaceOperatingMode + ";" +
-                deviceName + ";" +
-                autoPnName.ToString() + ";" +
-                pnDeviceName + ";" +
-                pnDeviceNumber + ";" +
-                ipAddress + ";" +
-                addressMask + ";" +
-                routerAddress + ";" +
-                subnetName + ";" +
-                ioSystemName;
-
-            return record;
-        }
-
-        void ExportToCSV(object sender, EventArgs e)
-        {
-            using (SaveFileDialog saveFileDialog1 = new SaveFileDialog())
-            {
-                saveFileDialog1.Filter = "csv files (*.csv)|*.csv|All files (*.*)|*.*";
-                saveFileDialog1.FilterIndex = 0;
-                saveFileDialog1.RestoreDirectory = true;
-
-                if (saveFileDialog1.ShowDialog() != DialogResult.OK) return;
-                
-                using (System.IO.StreamWriter file = new StreamWriter(saveFileDialog1.OpenFile()))
+                if (lastSortingOrder == SortBy.Subnet)
                 {
-                    file.WriteLine("Interface Mode;Device Name;PN Device Name;Auto PN Name;PN Number;IP Address;Address Mask;" +
-                        "Router Address;Subnet Name;IO System Name");
-                    
-
-                    projectLevel.Subnets.ForEach(sn =>
-                    {
-                        sn.IoSystems.ForEach(ios =>
-                        {
-                            file.WriteLine(CreateCSVRecord(ios.IoController, ios));
-                            ios.IoDevices.ForEach(iod => file.WriteLine(CreateCSVRecord(iod, ios)));
-                        });
-
-                        sn.SubnetLvlDevItems.ForEach(sdi => file.WriteLine(CreateCSVRecord(sdi, null)));
-                    });
-
-                    projectLevel.UnusedDeviceItems.ForEach(udi =>
-                    {
-                        file.WriteLine(CreateCSVRecord(udi, null));
-                    });
-                }
-                
-            }
-        }
-        #endregion
-
-        #region Table stylizing
-        List<int> RowsWithRepeatingIPs()
-        {
-            // can I just take this info from openness??
-            Dictionary<string, int> existingIPs = new Dictionary<string, int>();
-            List<int> indicesWithRepetingIPs = new List<int>();
-
-            foreach (DataGridViewRow row in deviceTable.Rows)
-            {
-                object obj = row.Cells[dgv_IpAddress.Index].Value;
-                if (obj == null) continue;
-                string deviceIP = obj.ToString();
-                if (existingIPs.ContainsKey(deviceIP))
-                {
-                    string firstMode = deviceTable.Rows[existingIPs[deviceIP]].Cells[dgv_Mode.Index].Value.ToString();
-                    string secondMode = row.Cells[dgv_Mode.Index].Value.ToString();
-                    string mode = "IoController, IoDevice";
-                    if (mode == firstMode && firstMode == secondMode) continue;
-
-                    indicesWithRepetingIPs.Add(existingIPs[deviceIP]);
-                    indicesWithRepetingIPs.Add(row.Index);
+                    PopulateDeviceTable(SortBy.SubnetRev, txt_Search.Text);
+                    lastSortingOrder = SortBy.SubnetRev;
+                    dgv_PnSubnet.HeaderCell.SortGlyphDirection = SortOrder.Ascending;
                 }
                 else
                 {
-                    existingIPs.Add(deviceIP, row.Index);
+                    PopulateDeviceTable(SortBy.Subnet, txt_Search.Text);
+                    lastSortingOrder = SortBy.Subnet;
+                    dgv_PnSubnet.HeaderCell.SortGlyphDirection = SortOrder.Descending;
                 }
             }
-
-            return indicesWithRepetingIPs;
         }
 
-        void MarkRowsWithRepeatingIPs()
+        private void ExportToCSV(object sender, EventArgs e)
         {
-            // reset this style somewhere 
-            foreach (DataGridViewRow row in deviceTable.Rows)
-            {
-                DataGridViewCell cell = row.Cells[dgv_IpAddress.Index];
-                if (!string.IsNullOrEmpty(cell.Value.ToString()))
-                {
-                    cell.Style.BackColor = System.Drawing.SystemColors.Control;
-                }
-                else
-                {
-                    cell.Style.BackColor = System.Drawing.SystemColors.ControlLight;
-                }
-            }
+            CSVExporter.Export(projectLevel);
+        }
+        #endregion
 
-            foreach (int index in RowsWithRepeatingIPs())
-            {
-                deviceTable.Rows[index].Cells[dgv_IpAddress.Index].Style.BackColor = System.Drawing.Color.Pink;
-            }
+        private DataGridViewRow IoControllerRow(IoSystemLevel ioSystem)
+        {
+            var ioControllerRow = DeviceRowsHelper.InitializeRow(ID.NextID, ioSystem.IoController, ioSystem, deviceTable);
+            var cells = ioControllerRow.Cells;
+            var deviceNameCell = cells[dgv_DeviceName.Index];
+
+            DeviceRowsHelper.PadCell(deviceNameCell, 0);
+            DeviceRowsHelper.DisableCell(cells[dgv_PnNumber.Index]);
+
+            if (!ioSystem.IoController.UseRouter) DeviceRowsHelper.DisableCell(cells[dgv_RouterAddress.Index]);
+
+            return ioControllerRow;
         }
 
-        private static void DisableCell(DataGridViewCell cell)
+        private DataGridViewRow IoDeviceRow(NetworkDeviceItem ioDevice, IoSystemLevel ioSystem)
         {
-            cell.ReadOnly = true;
-            cell.Style.BackColor = System.Drawing.SystemColors.ControlLight;
-            cell.Style.ForeColor = System.Drawing.SystemColors.GrayText;
-        }
+            var ioDeviceRow = DeviceRowsHelper.InitializeRow(ID.NextID, ioDevice, ioSystem, deviceTable);
+            var cells = ioDeviceRow.Cells;
+            var deviceNameCell = cells[dgv_DeviceName.Index];
 
-        private static void DisableCells(params DataGridViewCell[] cells)
-        {
-            foreach (var cell in cells)
-            {
-                DisableCell(cell);
-            }
-        }
-
-        void AddIoControllerRow(List<DataGridViewRow> rows, IoSystemLevel ioSystem)
-        {
-            int id = rows.Count + 1;
-            rows.Add(CreateTableRecord(id, ioSystem.IoController, ioSystem));
-
-            DataGridViewCellCollection cells = rows[rows.Count - 1].Cells;
-            cells[dgv_DeviceName.Index].Style.Padding = new Padding(0, 0, 0, 0);
-            DisableCell(cells[dgv_PnNumber.Index]);
-            if (!ioSystem.IoController.UseRouter) DisableCell(cells[dgv_RouterAddress.Index]);
-        }
-
-        void AddIoDeviceRow(List<DataGridViewRow> rows, NetworkDeviceItem ioDevice, IoSystemLevel ioSystem)
-        {
-            int id = rows.Count + 1;
-            rows.Add(CreateTableRecord(id, ioDevice, ioSystem));
-
-
-            DataGridViewCellCollection cells = rows[rows.Count - 1].Cells;
-            // padding on name column emulates some kind of tree structure
-            cells[dgv_DeviceName.Index].Style.Padding = new Padding(25, 0, 0, 0);
-
-            DisableCells(cells[dgv_IoSystem.Index], cells[dgv_PnSubnet.Index],
-                cells[dgv_RouterAddress.Index], cells[dgv_Mask.Index]);
+            DeviceRowsHelper.PadCell(deviceNameCell, 25);
+            DeviceRowsHelper.DisableCells(cells[dgv_IoSystem.Index], cells[dgv_PnSubnet.Index],
+                                          cells[dgv_RouterAddress.Index], cells[dgv_Mask.Index]);
 
             if (string.IsNullOrEmpty(cells[dgv_IpAddress.Index].Value?.ToString())) // empty in future?
             {
-                DisableCell(cells[dgv_IpAddress.Index]);
+                DeviceRowsHelper.DisableCell(cells[dgv_IpAddress.Index]);
             }
+
+            return ioDeviceRow;
         }
 
-        void AddSubnetDeviceRow(List<DataGridViewRow> rows, NetworkDeviceItem subnetDevice)
+        private DataGridViewRow SubnetDeviceRow(NetworkDeviceItem subnetDevice)
         {
-            int id = rows.Count + 1;
-            rows.Add(CreateTableRecord(id, subnetDevice, null));
+            var subnetDeviceRow = DeviceRowsHelper.InitializeRow(ID.NextID, subnetDevice, null, deviceTable);
+            var cells = subnetDeviceRow.Cells;
+            var deviceNameCell = cells[dgv_DeviceName.Index];
 
-            DataGridViewCellCollection cells = rows[rows.Count - 1].Cells;
-            cells[dgv_DeviceName.Index].Style.Padding = new Padding(12, 0, 0, 0);
+            DeviceRowsHelper.PadCell(deviceNameCell, 12);
+            DeviceRowsHelper.DisableCells(cells[dgv_IoSystem.Index], cells[dgv_PnSubnet.Index],
+                                          cells[dgv_RouterAddress.Index], cells[dgv_Mask.Index],
+                                          cells[dgv_PnNumber.Index]);
 
-            DisableCells(cells[dgv_IoSystem.Index], cells[dgv_PnSubnet.Index],
-                cells[dgv_RouterAddress.Index], cells[dgv_Mask.Index], cells[dgv_PnNumber.Index]);
+            return subnetDeviceRow;
         }
 
-        void AddUnusedDeviceRow(List<DataGridViewRow> rows, NetworkDeviceItem unusedDevice)
+        private DataGridViewRow UnusedDeviceRow(NetworkDeviceItem unusedDevice)
         {
-            int id = rows.Count + 1;
-            rows.Add(CreateTableRecord(id, unusedDevice, null));
+            var unusedDeviceRow = DeviceRowsHelper.InitializeRow(ID.NextID, unusedDevice, null, deviceTable);
+            var cells = unusedDeviceRow.Cells;
+            var deviceNameCell = cells[dgv_DeviceName.Index];
 
-            DataGridViewCellCollection cells = rows[rows.Count - 1].Cells;
-            cells[dgv_DeviceName.Index].Style.Padding = new Padding(5, 0, 0, 0);
+            DeviceRowsHelper.PadCell(deviceNameCell, 5);
+            DeviceRowsHelper.DisableCells(cells[dgv_IoSystem.Index], cells[dgv_PnSubnet.Index],
+                                          cells[dgv_RouterAddress.Index], cells[dgv_Mask.Index],
+                                          cells[dgv_PnNumber.Index]);
 
-            DisableCells(cells[dgv_IoSystem.Index], cells[dgv_PnSubnet.Index],
-                    cells[dgv_RouterAddress.Index], cells[dgv_Mask.Index], cells[dgv_PnNumber.Index]);
+            return unusedDeviceRow;
         }
 
-        #endregion
-
-        #region Sorting
-        private static void Sort(List<NetworkDeviceItem> sortedList, SortBy sortBy)
+        private void txt_StatusBar_Click(object sender, EventArgs e)
         {
-            switch (sortBy)
-            {
-                case SortBy.Name:
-                    sortedList.Sort(CompareByDeviceName);
-                    break;
-                case SortBy.NameRev:
-                    sortedList.Sort(CompareByDeviceNameRev);
-                    break;
-                case SortBy.IpAddress:
-                    sortedList.Sort(CompareByDeviceIpAddress);
-                    break;
-                case SortBy.IpAddressRev:
-                    sortedList.Sort(CompareByDeviceIpAddressRev);
-                    break;
-                default:
-                    break;
-            }
+
         }
 
-        private static void Sort(List<SubnetLevel> sortedList, SortBy sortBy)
+        private void groupBox2_Enter(object sender, EventArgs e)
         {
-            switch (sortBy)
-            {
-                case SortBy.Name:
-                    sortedList.Sort(CompareByName);
-                    break;
-                case SortBy.NameRev:
-                    sortedList.Sort(CompareByNameRev);
-                    break;
-                case SortBy.IpAddress:
-                    sortedList.Sort(CompareByName);
-                    break;
-                case SortBy.IpAddressRev:
-                    sortedList.Sort(CompareByNameRev);
-                    break;
-                default:
-                    break;
-            }
+
         }
 
-        private static void Sort(List<IoSystemLevel> sortedList, SortBy sortBy)
+        private void DisplayOnlyFiltered(object sender, System.EventArgs e)
         {
-            switch (sortBy)
-            {
-                case SortBy.Name:
-                    sortedList.Sort(CompareByControllerName);
-                    break;
-                case SortBy.NameRev:
-                    sortedList.Sort(CompareByControllerNameRev);
-                    break;
-                case SortBy.IpAddress:
-                    sortedList.Sort(CompareByControllerIpAddress);
-                    break;
-                case SortBy.IpAddressRev:
-                    sortedList.Sort(CompareByControllerIpAddressRev);
-                    break;
-                default:
-                    break;
-            }
+            PopulateDeviceTable(lastSortingOrder, txt_Search.Text);
         }
-        
-        private static int CompareByName(SubnetLevel x, SubnetLevel y)
-        {
-            if (x == null)
-            {
-                if (y == null)
-                {
-                    // If x is null and y is null, they're
-                    // equal.
-                    return 0;
-                }
-                else
-                {
-                    // If x is null and y is not null, y
-                    // is greater.
-                    return -1;
-                }
-            }
-            else
-            {
-                // If x is not null...
-                if (y == null)
-                // ...and y is null, x is greater.
-                {
-                    return 1;
-                }
-                else
-                {
-                    // ...and y is not null, compare the
-                    // lengths of the two strings.
-                    return x.SubnetName.CompareTo(y.SubnetName);
+    }
 
-                }
-            }
-        }
-
-        private static int CompareByNameRev(SubnetLevel x, SubnetLevel y)
-        {
-            return -1* CompareByName(x, y);
-        }
-
-        private static int CompareByControllerName(IoSystemLevel x, IoSystemLevel y)
-        {
-            if (x == null)
-            {
-                if (y == null) return 0;
-                else return -1;
-            }
-            else
-            {
-                if (y == null)
-                // ...and y is null, x is greater.
-                {
-                    return 1;
-                }
-                else
-                {
-                    // ...and y is not null, compare the
-                    // lengths of the two strings.
-                    return x.IoController.HMName.CompareTo(y.IoController.HMName);
-                    //int retval = x.Length.CompareTo(y.Length);
-                }
-            }
-        }
-
-        private static int CompareByControllerNameRev(IoSystemLevel x, IoSystemLevel y)
-        {
-            return -1 * CompareByControllerName(x, y);
-        }
-
-        private static int CompareByDeviceName(NetworkDeviceItem x, NetworkDeviceItem y)
-        {
-            if (x == null)
-            {
-                if (y == null)
-                {
-                    return 0;
-                }
-                else
-                {                   
-                    return -1; // y is greater.
-                }
-            }
-            else
-            {
-                // If x is not null...
-                if (y == null)
-                // ...and y is null, x is greater.
-                {
-                    return 1;
-                }
-                else
-                {
-                    // ...and y is not null, compare the
-                    // lengths of the two strings.
-                    return x.HMName.CompareTo(y.HMName);
-                    //int retval = x.Length.CompareTo(y.Length);
-                }
-            }
-        }
-
-        private static int CompareByDeviceNameRev(NetworkDeviceItem x, NetworkDeviceItem y)
-        {
-            return -1 * CompareByDeviceName(x, y);
-        }
-
-        private static int CompareByControllerIpAddress(IoSystemLevel x, IoSystemLevel y)
-        {
-            if (x == null)
-            {
-                if (y == null)
-                {
-                    return 0;
-                }
-                else
-                {
-                    return -1; // y is greater.
-                }
-            }
-            else
-            {
-                // If x is not null...
-                if (y == null)
-                // ...and y is null, x is greater.
-                {
-                    return 1;
-                }
-                else
-                { // x and y exist but check if they have ip addresses
-                    if (String.IsNullOrEmpty(x.IoController.IpAddress))
-                    {
-                        if (String.IsNullOrEmpty(y.IoController.IpAddress))
-                        {
-                            return 0;
-                        }
-                        else
-                        {
-                            return -1; // y.address is greater.
-                        }
-                    }
-                    else
-                    {
-                        if (String.IsNullOrEmpty(y.IoController.IpAddress))
-                        {
-                            return 1;
-                        }
-                        else
-                        { // they both have ip addresses
-                            return x.IoController.IpAddress.CompareTo(y.IoController.IpAddress);
-                        }
-                    }
-                }
-            }
-        }
-
-        private static int CompareByControllerIpAddressRev(IoSystemLevel x, IoSystemLevel y)
-        {
-            return -1 * CompareByControllerIpAddress(x, y);
-        }
-
-        private static int CompareByDeviceIpAddress(NetworkDeviceItem x, NetworkDeviceItem y)
-        {
-            if (x == null)
-            {
-                if (y == null)
-                {
-                    return 0;
-                }
-                else
-                {
-                    return -1; // y is greater.
-                }
-            }
-            else
-            {
-                // If x is not null...
-                if (y == null)
-                // ...and y is null, x is greater.
-                {
-                    return 1;
-                }
-                else
-                { // x and y exist but check if they have ip addresses
-                    if (String.IsNullOrEmpty(x.IpAddress))
-                    {
-                        if (String.IsNullOrEmpty(y.IpAddress))
-                        {
-                            return 0;
-                        }
-                        else
-                        {
-                            return -1; // y.address is greater.
-                        }
-                    }
-                    else
-                    {
-                        if (String.IsNullOrEmpty(y.IpAddress))
-                        {
-                            return 1;
-                        }
-                        else
-                        { // they both have ip addresses
-                            return x.IpAddress.CompareTo(y.IpAddress);
-                        }
-                    }
-                }
-            }
-        }
-
-        private static int CompareByDeviceIpAddressRev(NetworkDeviceItem x, NetworkDeviceItem y)
-        {
-            return -1 * CompareByDeviceIpAddress(x, y);
-        }
-
-        private enum SortBy
-        {
-            Name,
-            NameRev,
-            IpAddress,
-            IpAddressRev
-        }
-
-        #endregion
-
+    enum SortBy
+    {
+        Name,
+        NameRev,
+        IpAddress,
+        IpAddressRev,
+        Subnet,
+        SubnetRev
     }
 
     // I use this to set the clock to highest frequency so Openness API calls are faster. I think it works
