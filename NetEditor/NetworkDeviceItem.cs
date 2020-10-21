@@ -78,7 +78,6 @@ namespace NetEditor
             this.IoSystemLevel = ioSystemLevel;
             this.SubnetLevel = subnetLevel;
             this.workMode = workMode;
-
         }
 
         public async Task UpdateAllParameters()
@@ -311,29 +310,22 @@ namespace NetEditor
 
         public async Task ChangeAddressMask(string newMask)
         {
-            AddressMask = null;
+            //AddressMask = null;
 
-            if (IpSelectedByProject)
-            {
-                IPAddress mask;
-                bool addressIsValid = IPAddress.TryParse(newMask, out mask);
+            if (!IpSelectedByProject) throw new EngineeringNotSupportedException(
+                                                "Changing address mask is not supported for this IP selection mode."
+                                                + " You can change it in TIA Portal.");
+            
+            IPAddress mask;
+            bool addressIsValid = IPAddress.TryParse(newMask, out mask);
+            if (!addressIsValid) throw new ArgumentException($"{newMask} is not a valid mask.");
 
-                if (addressIsValid)
-                {
-                    await Task.Run(() => node.SetAttribute("SubnetMask", mask.ToString())).ConfigureAwait(false);
-                    
-                    AddressMask = await Task.Run(() => node.GetAttribute("SubnetMask").ToString()).ConfigureAwait(false);
-                }
-                else
-                {
-                    throw new ArgumentException("Provided input is not a valid mask.");
-                }
-            }
-            else
-            {
-                throw new EngineeringNotSupportedException("Changing address mask is not supported for this IP protocol selection mode. " +
-                    "You can change it in TIA Portal.");
-            }
+            string[] parts = mask.ToString().Split('.');
+            bool allowedByTIAP = !parts.Any((p) => !(p.Equals("0") || p.Equals("255")));
+            if (!allowedByTIAP) throw new ArgumentException($"{mask} is not a mask allowed by TIA Portal.");
+
+            await Task.Run(() => node.SetAttribute("SubnetMask", mask.ToString())).ConfigureAwait(false);    
+            AddressMask = await Task.Run(() => node.GetAttribute("SubnetMask").ToString()).ConfigureAwait(false);
         }
 
         public void ChangeRouterAddress(string newAddress)

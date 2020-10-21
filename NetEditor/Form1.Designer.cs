@@ -66,6 +66,8 @@ namespace NetEditor
             this.groupBox1 = new System.Windows.Forms.GroupBox();
             this.btn_CommitChanges = new System.Windows.Forms.Button();
             this.btn_ClearChanges = new System.Windows.Forms.Button();
+            this.groupBox2 = new System.Windows.Forms.GroupBox();
+            this.txt_Search = new System.Windows.Forms.TextBox();
             this.progressBar = new System.Windows.Forms.ProgressBar();
             this.btn_ExportToCSV = new System.Windows.Forms.Button();
             this.txt_StatusBar = new System.Windows.Forms.Label();
@@ -74,6 +76,7 @@ namespace NetEditor
             ((System.ComponentModel.ISupportInitialize)(this.deviceTable)).BeginInit();
             this.tableLayoutPanel2.SuspendLayout();
             this.groupBox1.SuspendLayout();
+            this.groupBox2.SuspendLayout();
             this.SuspendLayout();
             // 
             // txt_Status
@@ -107,7 +110,7 @@ namespace NetEditor
             this.grp_Changes.MinimumSize = new System.Drawing.Size(159, 126);
             this.grp_Changes.Name = "grp_Changes";
             this.grp_Changes.Padding = new System.Windows.Forms.Padding(6, 5, 6, 5);
-            this.grp_Changes.Size = new System.Drawing.Size(160, 180);
+            this.grp_Changes.Size = new System.Drawing.Size(160, 126);
             this.grp_Changes.TabIndex = 18;
             this.grp_Changes.TabStop = false;
             this.grp_Changes.Text = "TIA Portal Project";
@@ -347,7 +350,7 @@ namespace NetEditor
             this.dgv_PnSubnet.HeaderText = "PN Subnet";
             this.dgv_PnSubnet.MinimumWidth = 6;
             this.dgv_PnSubnet.Name = "dgv_PnSubnet";
-            this.dgv_PnSubnet.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.NotSortable;
+            this.dgv_PnSubnet.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.Programmatic;
             // 
             // dgv_IoSystem
             // 
@@ -365,14 +368,16 @@ namespace NetEditor
             this.tableLayoutPanel2.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
             this.tableLayoutPanel2.Controls.Add(this.grp_Changes, 0, 0);
             this.tableLayoutPanel2.Controls.Add(this.groupBox1, 0, 1);
+            this.tableLayoutPanel2.Controls.Add(this.groupBox2, 0, 2);
             this.tableLayoutPanel2.Location = new System.Drawing.Point(0, 0);
             this.tableLayoutPanel2.Margin = new System.Windows.Forms.Padding(0);
             this.tableLayoutPanel2.MinimumSize = new System.Drawing.Size(171, 300);
             this.tableLayoutPanel2.Name = "tableLayoutPanel2";
-            this.tableLayoutPanel2.RowCount = 2;
-            this.tableLayoutPanel2.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 58.38323F));
-            this.tableLayoutPanel2.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 41.61677F));
-            this.tableLayoutPanel2.Size = new System.Drawing.Size(172, 334);
+            this.tableLayoutPanel2.RowCount = 3;
+            this.tableLayoutPanel2.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 46.93877F));
+            this.tableLayoutPanel2.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 53.06123F));
+            this.tableLayoutPanel2.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Absolute, 83F));
+            this.tableLayoutPanel2.Size = new System.Drawing.Size(172, 366);
             this.tableLayoutPanel2.TabIndex = 119;
             // 
             // groupBox1
@@ -381,7 +386,7 @@ namespace NetEditor
             | System.Windows.Forms.AnchorStyles.Right)));
             this.groupBox1.Controls.Add(this.btn_CommitChanges);
             this.groupBox1.Controls.Add(this.btn_ClearChanges);
-            this.groupBox1.Location = new System.Drawing.Point(6, 199);
+            this.groupBox1.Location = new System.Drawing.Point(6, 137);
             this.groupBox1.Margin = new System.Windows.Forms.Padding(6, 5, 6, 5);
             this.groupBox1.MaximumSize = new System.Drawing.Size(160, 145);
             this.groupBox1.MinimumSize = new System.Drawing.Size(159, 100);
@@ -421,6 +426,26 @@ namespace NetEditor
             this.btn_ClearChanges.Text = "Clear Changes";
             this.btn_ClearChanges.UseVisualStyleBackColor = true;
             this.btn_ClearChanges.Click += new System.EventHandler(this.ClearChanges);
+            // 
+            // groupBox2
+            // 
+            this.groupBox2.Controls.Add(this.txt_Search);
+            this.groupBox2.Location = new System.Drawing.Point(3, 285);
+            this.groupBox2.Name = "groupBox2";
+            this.groupBox2.Size = new System.Drawing.Size(166, 58);
+            this.groupBox2.TabIndex = 20;
+            this.groupBox2.TabStop = false;
+            this.groupBox2.Text = "Search box";
+            this.groupBox2.Enter += new System.EventHandler(this.groupBox2_Enter);
+            // 
+            // txt_Search
+            // 
+            this.txt_Search.Enabled = false;
+            this.txt_Search.Location = new System.Drawing.Point(15, 24);
+            this.txt_Search.Name = "txt_Search";
+            this.txt_Search.Size = new System.Drawing.Size(136, 24);
+            this.txt_Search.TabIndex = 0;
+            this.txt_Search.TextChanged += new System.EventHandler(this.DisplayOnlyFiltered);
             // 
             // progressBar
             // 
@@ -462,7 +487,7 @@ namespace NetEditor
             this.txt_StatusBar.Name = "txt_StatusBar";
             this.txt_StatusBar.Size = new System.Drawing.Size(925, 15);
             this.txt_StatusBar.TabIndex = 121;
-            this.txt_StatusBar.Text = "Status bar (placeholder)";
+            this.txt_StatusBar.Click += new System.EventHandler(this.txt_StatusBar_Click);
             // 
             // Form1
             // 
@@ -486,6 +511,8 @@ namespace NetEditor
             this.tableLayoutPanel2.ResumeLayout(false);
             this.groupBox1.ResumeLayout(false);
             this.groupBox1.PerformLayout();
+            this.groupBox2.ResumeLayout(false);
+            this.groupBox2.PerformLayout();
             this.ResumeLayout(false);
 
         }
@@ -519,6 +546,8 @@ namespace NetEditor
         private DataGridViewTextBoxColumn dgv_RouterAddress;
         private DataGridViewTextBoxColumn dgv_PnSubnet;
         private DataGridViewTextBoxColumn dgv_IoSystem;
+        private GroupBox groupBox2;
+        private TextBox txt_Search;
     }
 }
 
